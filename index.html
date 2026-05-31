@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>kronikier (web) — historical contact miner</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      --fg: #1a1a1a;
+      --muted: #666;
+      --bg: #fafafa;
+      --card: #fff;
+      --border: #ddd;
+      --accent: #2b6cb0;
+      --accent-fg: #fff;
+      --danger: #c53030;
+      --ok: #2f855a;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px 16px 64px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      color: var(--fg);
+      background: var(--bg);
+      line-height: 1.45;
+    }
+    main { max-width: 920px; margin: 0 auto; }
+    h1 { margin: 0 0 4px; font-size: 22px; }
+    .tagline { color: var(--muted); margin: 0 0 24px; font-size: 14px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .row { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+    .row > label { flex: 1 1 0; min-width: 140px; font-size: 13px; color: var(--muted); }
+    .row > label > input, .row > label > select {
+      display: block;
+      width: 100%;
+      margin-top: 4px;
+      padding: 6px 8px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-size: 14px;
+      font-family: inherit;
+    }
+    .row > label > input[type=number] { font-family: var(--mono); }
+    .mode { display: flex; gap: 16px; align-items: center; font-size: 14px; }
+    .mode > label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+    .actions { display: flex; gap: 8px; align-items: center; }
+    button {
+      padding: 8px 16px;
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: var(--accent-fg);
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.secondary {
+      background: transparent;
+      color: var(--accent);
+    }
+    button.danger {
+      background: transparent;
+      color: var(--danger);
+      border-color: var(--danger);
+    }
+    .progress {
+      height: 8px;
+      background: #eee;
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 8px 0;
+    }
+    .progress > div {
+      height: 100%;
+      background: var(--accent);
+      transition: width 0.15s ease;
+    }
+    .status-line { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      text-align: left;
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    th { font-weight: 600; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+    td.kind { font-family: var(--mono); font-size: 11px; color: var(--muted); text-transform: uppercase; }
+    td.value { font-family: var(--mono); }
+    td a { color: var(--accent); text-decoration: none; }
+    td a:hover { text-decoration: underline; }
+    .empty { color: var(--muted); font-style: italic; padding: 16px 0; }
+    .errors { font-family: var(--mono); font-size: 11px; color: var(--danger); white-space: pre-wrap; max-height: 180px; overflow: auto; }
+    details summary { cursor: pointer; user-select: none; font-size: 13px; color: var(--muted); }
+    details.advanced {
+      margin: 4px 0 12px;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    details.advanced > summary {
+      font-size: 12px;
+      color: var(--muted);
+      padding: 8px 0;
+      list-style: none;
+    }
+    details.advanced > summary::-webkit-details-marker { display: none; }
+    details.advanced > summary::before { content: "▸ "; display: inline-block; width: 14px; }
+    details.advanced[open] > summary::before { content: "▾ "; }
+    details.advanced .row { margin: 4px 0 8px; }
+    .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    code { font-family: var(--mono); background: #f0f0f0; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+    .header-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+    .header-row h2 { margin: 0; font-size: 14px; }
+    .pill { display: inline-block; padding: 1px 6px; background: #eef; border-radius: 10px; font-size: 11px; color: var(--accent); }
+    .examples {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 4px 0 8px;
+    }
+    .examples-label {
+      font-size: 12px;
+      color: var(--muted);
+      align-self: center;
+      margin-right: 4px;
+    }
+    .examples button {
+      background: #f0f0f0;
+      color: var(--fg);
+      border: 1px solid #e0e0e0;
+      border-radius: 12px;
+      padding: 3px 10px;
+      font-size: 12px;
+      font-family: var(--mono);
+      font-weight: 400;
+      cursor: pointer;
+    }
+    .examples button:hover { background: #e8e8e8; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>kronikier <span class="pill">web</span></h1>
+  <p class="tagline">
+    🗄️ Get historical contacts for a website from web.archive.org snapshots.
+    Web version of <a href="https://github.com/soxoj/kronikier">https://github.com/soxoj/kronikier</a> —
+    consider installing the CLI for fuller results and faster scans.
+  </p>
+
+  <form id="form" class="card">
+    <div class="row">
+      <label style="flex: 3 1 100%;">
+        Domain or URL
+        <input id="target" type="text" placeholder="example.com or https://example.com/contact" required autocomplete="off" autofocus>
+      </label>
+    </div>
+    <div class="examples">
+      <span class="examples-label">Examples:</span>
+      <button type="button" data-example="theranos.com">theranos.com</button>
+      <button type="button" data-example="wirecard.com">wirecard.com</button>
+      <button type="button" data-example="http://www.theranos.com/partial/contact-us" data-mode="single">http://www.theranos.com/partial/contact-us</button>
+    </div>
+    <details class="advanced">
+      <summary>Advanced settings</summary>
+      <div class="row">
+        <div class="mode" style="flex: 1 1 100%;">
+          <span style="color: var(--muted); font-size: 13px;">Mode:</span>
+          <label><input type="radio" name="mode" value="domain" checked> Domain (rank contact pages)</label>
+          <label><input type="radio" name="mode" value="single"> Single URL (all snapshots)</label>
+        </div>
+      </div>
+      <div class="row">
+        <label>From year <input id="from-year" type="number" min="1996" max="2030" placeholder="any"></label>
+        <label>To year <input id="to-year" type="number" min="1996" max="2030" placeholder="any"></label>
+        <label>Max snapshots <input id="max-snapshots" type="number" min="1" max="2000" value="60"></label>
+      </div>
+    </details>
+    <div class="actions">
+      <button id="start" type="submit">Start scan</button>
+      <button id="stop" type="button" class="danger" hidden>Stop</button>
+      <button id="download" type="button" class="secondary" hidden>Download CSV</button>
+      <span id="summary" class="status-line"></span>
+    </div>
+    <p class="hint">
+      Politely lists archived pages, picks the ones that look like contact
+      pages, then fetches the top of them and extracts phone numbers and
+      email addresses.
+    </p>
+  </form>
+
+  <div class="card">
+    <div class="header-row">
+      <h2>Progress</h2>
+      <span id="counters" class="status-line"></span>
+    </div>
+    <div class="progress"><div id="bar" style="width: 0"></div></div>
+    <div id="stage" class="status-line">Idle.</div>
+  </div>
+
+  <div class="card">
+    <div class="header-row">
+      <h2>Contacts</h2>
+      <span id="contacts-count" class="status-line"></span>
+    </div>
+    <table id="results">
+      <thead>
+        <tr>
+          <th>Kind</th>
+          <th>Value</th>
+          <th>First seen</th>
+          <th>Last seen</th>
+          <th>Sightings</th>
+        </tr>
+      </thead>
+      <tbody><tr><td colspan="5" class="empty">No scan yet.</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <details>
+      <summary>Errors / debug log</summary>
+      <pre id="errors" class="errors"></pre>
+    </details>
+  </div>
+
+  <p class="tagline" style="margin-top: 32px;">
+    Spotted a bug or a missed contact?
+    Email <a href="mailto:kronikier@soxoj.com">kronikier@soxoj.com</a>
+    or open an issue at
+    <a href="https://github.com/soxoj/kronikier/issues" target="_blank" rel="noopener">github.com/soxoj/kronikier/issues</a>.
+  </p>
+
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/libphonenumber-js@1.11.17/bundle/libphonenumber-max.min.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>

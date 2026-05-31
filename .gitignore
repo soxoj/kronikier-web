@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Local cache override (if someone points KRONIKIER_WEB_CACHE_DIR here)
+.cache/
+cache/
+
+# Node (in case JS tooling gets added later)
+node_modules/
+package-lock.json
+
+# Editor / OS cruft
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~
+
+# Logs
+*.log
