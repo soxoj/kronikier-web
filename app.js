@@ -310,21 +310,50 @@ function looksLikeEmail(addr) {
   return true;
 }
 
+// Local-part words that are almost never real email mailboxes but are
+// common in English/Russian prose right before " at " — when ``at`` gets
+// rewritten to ``@`` by the deobfuscator, prose like "Commercial support
+// is available at nginx.com" produces a pseudo-email "available@nginx.com".
+// A real plain ``available@example.com`` (in a mailto, or written with
+// ``@``) is caught by Pass 1 and kept.
+const PROSE_AT_STOPWORDS = new Set([
+  "available", "archived", "based", "found", "headquartered",
+  "hosted", "listed", "located", "registered", "stationed",
+  "displayed", "offered", "presented", "showcased", "stored",
+  "published",
+]);
+
 function extractEmails(html) {
   const text = normalizeHtml(html);
   const seen = new Set();
   const out = [];
-  for (const pass of [text, deobfuscateAtDot(text)]) {
-    EMAIL_RE.lastIndex = 0;
-    let m;
-    while ((m = EMAIL_RE.exec(pass)) !== null) {
-      const raw = m[1];
-      const canonical = raw.toLowerCase().replace(/[.,;:]+$/, "");
-      if (seen.has(canonical)) continue;
-      if (!looksLikeEmail(canonical)) continue;
-      seen.add(canonical);
-      out.push({ kind: "email", value: canonical, raw });
-    }
+
+  // Pass 1 — text as-is.
+  EMAIL_RE.lastIndex = 0;
+  let m;
+  while ((m = EMAIL_RE.exec(text)) !== null) {
+    const raw = m[1];
+    const canonical = raw.toLowerCase().replace(/[.,;:]+$/, "");
+    if (seen.has(canonical)) continue;
+    if (!looksLikeEmail(canonical)) continue;
+    seen.add(canonical);
+    out.push({ kind: "email", value: canonical, raw });
+  }
+
+  // Pass 2 — deobfuscated. Stricter: reject prose-stopword local parts
+  // that ONLY appear in this pass (real emails would have surfaced above).
+  const pass1Emails = new Set(seen);
+  EMAIL_RE.lastIndex = 0;
+  const deobf = deobfuscateAtDot(text);
+  while ((m = EMAIL_RE.exec(deobf)) !== null) {
+    const raw = m[1];
+    const canonical = raw.toLowerCase().replace(/[.,;:]+$/, "");
+    if (seen.has(canonical)) continue;
+    if (!looksLikeEmail(canonical)) continue;
+    const local = canonical.slice(0, canonical.indexOf("@"));
+    if (!pass1Emails.has(canonical) && PROSE_AT_STOPWORDS.has(local)) continue;
+    seen.add(canonical);
+    out.push({ kind: "email", value: canonical, raw });
   }
   return out;
 }
