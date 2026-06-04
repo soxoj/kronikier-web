@@ -133,6 +133,9 @@ const REG_NUM_RE = new RegExp(
     "|VAT(?:[.\\s]*(?:No|Number|Id))?" +
     "|USt[\\s.\\-]?Id(?:Nr|N)?" +
     "|INN|ИНН|ОГРН|КПП|ОКПО|БИК" +
+    "|УНП|UNP" +
+    "|ЕГРПОУ|ЄДРПОУ|EDRPOU" +
+    "|БИН|БІН|IIN" +
     "|Tax\\s*ID" +
     "|EIN|CIN|BRN|ISIN|WKN|CUSIP|SEDOL|FIGI" +
     "|NIF|CIF|CNPJ|CPF" +
@@ -150,6 +153,13 @@ const ISIN_RE = /\b[A-Z]{2}[A-Z0-9]{9}\d\b/g;
 // capitalised city. libphonenumber claims the digit pair as a German
 // landline; the city name is what distinguishes it from a phone.
 const GERMAN_POSTAL_ADDR_RE = /\b\d{1,4}\s+\d{5}\b(?=\s+[A-ZÄÖÜ])/g;
+
+// CIS / generic postal-code-in-address: 5-7 digit number preceded by
+// ``, `` (or ``; ``) and followed by either ``, letter`` (next address
+// chunk: ``, 225006, Брестская``) or `` letter`` (postal then city:
+// ``, 224022 г. Брест,``). The leading comma-space lookbehind is the
+// strongest signal that this is address-internal, not a phone.
+const CIS_POSTAL_RE = /(?<=[,;]\s)\d{5,7}(?=\s+\p{L}|\s*,\s*\p{L})/gu;
 
 // Element types whose textContent we never want fed to the phone matcher
 // (script/style/svg/noscript bodies carry coordinate sequences, analytics
@@ -262,6 +272,7 @@ function normalizeHtml(html) {
   text = text.replace(REG_NUM_RE, blank);
   text = text.replace(ISIN_RE, blank);
   text = text.replace(GERMAN_POSTAL_ADDR_RE, blank);
+  text = text.replace(CIS_POSTAL_RE, blank);
 
   // Bridge ``/`` separators in phone-shaped substrings. Two passes — the
   // ``+``-anchored international form, then the bare phone-shaped split.
@@ -799,6 +810,7 @@ async function runScan(opts, signal) {
   }
 
   let chosen;
+  let totalCandidates = snapshots.length;
   const gate = createRateGate();
 
   if (opts.mode === "domain") {
@@ -822,6 +834,7 @@ async function runScan(opts, signal) {
         // Probed paths are precisely the ones CDX missed → high signal.
         // Put them at the head of the queue.
         chosen = extra.concat(chosen).slice(0, limit);
+        totalCandidates += extra.length;
         logError(`Probe added ${extra.length} snapshot(s) CDX missed.`);
       }
     }
@@ -832,7 +845,11 @@ async function runScan(opts, signal) {
     chosen = snapshots.slice(0, limit);
   }
 
-  setStage(`Fetching ${chosen.length} of ${snapshots.length.toLocaleString()} candidate snapshot${snapshots.length === 1 ? "" : "s"}…`);
+  if (chosen.length === totalCandidates) {
+    setStage(`Fetching ${chosen.length} snapshot${chosen.length === 1 ? "" : "s"}…`);
+  } else {
+    setStage(`Fetching ${chosen.length} of ${totalCandidates.toLocaleString()} candidate snapshots…`);
+  }
 
   const sightings = [];
   let done = 0;

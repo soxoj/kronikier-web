@@ -20,8 +20,10 @@ The proxy makes its HTTP calls identical to what the kronikier CLI does:
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
+import socket
 import sys
 import threading
 import time
@@ -41,6 +43,7 @@ UPSTREAM_USER_AGENT = "kronikier-web/0.1 (+https://github.com/soxoj/kronikier)"
 # Mirrors kronikier.fetcher._RETRYABLE_STATUSES.
 RETRYABLE_STATUSES = frozenset({404, 408, 429, 500, 502, 503, 504})
 MAX_RETRIES = 3  # 1 initial + 3 retries, like CLI default
+MAX_REDIRECTS = 5  # follow IA playback redirects, re-validating every hop
 
 WEB_DIR = Path(__file__).resolve().parent
 
@@ -129,42 +132,97 @@ def _cache_put(url: str, body: bytes, content_type: str, status: int) -> None:
             except OSError: pass
 
 
-def _fetch_with_retries(url: str):
-    """Mirror ``kronikier.fetcher._fetch_one_attempts``: retry on the same
-    statuses with the same backoff so the JS layer sees a clean 200 (or a
-    real, persistent error) instead of bouncing on transient IA hiccups.
+def _resolves_to_public_ip(hostname: str) -> bool:
+    """Reject hostnames that resolve to private/loopback/link-local/reserved
+    addresses. Blocks SSRF to internal services or the cloud-metadata
+    endpoint (169.254.169.254) even if DNS or a redirect points there.
     """
-    last_err: str | None = None
-    for attempt in range(MAX_RETRIES + 1):
+    if not hostname:
+        return False
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        return False
+    for info in infos:
         try:
-            resp = _session.get(url, timeout=UPSTREAM_TIMEOUT, allow_redirects=True)
-            if resp.status_code == 200:
-                return (
-                    resp.content,
-                    resp.headers.get("Content-Type", "application/octet-stream"),
-                    resp.status_code,
-                    None,
+            addr = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if (addr.is_private or addr.is_loopback or addr.is_link_local
+                or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
+            return False
+    return True
+
+
+def _validate_upstream(url: str) -> str | None:
+    """Return an error message if *url* is not an allowed, public-resolving
+    http(s) target; ``None`` if it's safe to fetch. The host allow-list is the
+    primary control (the proxy is not an open relay); the public-IP check is
+    defence-in-depth against redirect/DNS-based SSRF.
+    """
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return "malformed url"
+    if parsed.scheme not in ("http", "https"):
+        return "scheme must be http/https"
+    if parsed.hostname not in ALLOWED_UPSTREAM_HOSTS:
+        return f"upstream host not allowed: {parsed.hostname}"
+    if not _resolves_to_public_ip(parsed.hostname):
+        return f"upstream resolves to a non-public address: {parsed.hostname}"
+    return None
+
+
+def _fetch_with_retries(url: str):
+    """Mirror ``kronikier.fetcher._fetch_one_attempts`` retry policy, but follow
+    redirects MANUALLY (``allow_redirects=False``) and re-validate every hop
+    against the allow-list + public-IP check. A malicious or compromised
+    redirect therefore can't turn the proxy into an SSRF to internal services
+    or cloud metadata. The JS layer still sees a clean 200 (or a real,
+    persistent error) instead of bouncing on transient IA hiccups.
+    """
+    current = url
+    for _ in range(MAX_REDIRECTS + 1):
+        last_err: str | None = None
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                resp = _session.get(
+                    current, timeout=UPSTREAM_TIMEOUT, allow_redirects=False
                 )
-            last_err = f"HTTP {resp.status_code}"
-            if resp.status_code in RETRYABLE_STATUSES and attempt < MAX_RETRIES:
-                # CLI uses 3.0 for 404 (often transient on IA), 1.5 for the rest.
-                backoff = 3.0 if resp.status_code == 404 else 1.5
-                time.sleep(backoff * (attempt + 1))
-                continue
-            # Non-retryable non-200 — surface to the browser as-is so the
-            # client can decide what to do.
-            return (
-                resp.content,
-                resp.headers.get("Content-Type", "application/octet-stream"),
-                resp.status_code,
-                None,
-            )
-        except requests.RequestException as e:
-            last_err = f"{type(e).__name__}: {e}"
-            if attempt < MAX_RETRIES:
-                time.sleep(1.5 * (attempt + 1))
-                continue
-    return None, None, None, last_err
+                status = resp.status_code
+                ct = resp.headers.get("Content-Type", "application/octet-stream")
+
+                if status in (301, 302, 303, 307, 308):
+                    location = resp.headers.get("Location")
+                    if not location:
+                        return resp.content, ct, status, None
+                    nxt = urllib.parse.urljoin(current, location)
+                    err = _validate_upstream(nxt)
+                    if err is not None:
+                        return None, None, None, f"blocked redirect: {err}"
+                    current = nxt
+                    break  # restart the retry loop against the new URL
+
+                if status == 200:
+                    return resp.content, ct, status, None
+
+                last_err = f"HTTP {status}"
+                if status in RETRYABLE_STATUSES and attempt < MAX_RETRIES:
+                    # CLI uses 3.0 for 404 (often transient on IA), 1.5 for the rest.
+                    backoff = 3.0 if status == 404 else 1.5
+                    time.sleep(backoff * (attempt + 1))
+                    continue
+                # Non-retryable (or retries exhausted) — surface as-is so the
+                # client can decide what to do.
+                return resp.content, ct, status, None
+            except requests.RequestException as e:
+                last_err = f"{type(e).__name__}: {e}"
+                if attempt < MAX_RETRIES:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                return None, None, None, last_err
+        # inner loop exited via `break` -> a redirect; follow it
+    return None, None, None, "too many redirects"
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -182,9 +240,18 @@ class Handler(SimpleHTTPRequestHandler):
             tag = f" [cache hits={hits} misses={misses}]"
         sys.stderr.write(f"  {self.address_string()} - {fmt % args}{tag}\n")
 
+    # Only these static assets are served; everything else (source files,
+    # .venv, __pycache__, directory listings) returns 404 so nothing leaks
+    # once the service is exposed publicly.
+    STATIC_ALLOW = frozenset({"/", "/index.html", "/app.js"})
+
     def do_GET(self) -> None:  # noqa: N802
         if self.path.startswith("/proxy?") or self.path.startswith("/proxy/"):
             self._handle_proxy()
+            return
+        path = urllib.parse.urlparse(self.path).path
+        if path not in self.STATIC_ALLOW:
+            self._send_error(HTTPStatus.NOT_FOUND, "not found")
             return
         super().do_GET()
 
@@ -200,20 +267,12 @@ class Handler(SimpleHTTPRequestHandler):
             return
         upstream = upstream_list[0]
 
-        try:
-            upstream_parsed = urllib.parse.urlparse(upstream)
-        except ValueError:
-            self._send_error(HTTPStatus.BAD_REQUEST, "malformed url")
-            return
-
-        if upstream_parsed.scheme not in ("http", "https"):
-            self._send_error(HTTPStatus.BAD_REQUEST, "scheme must be http/https")
-            return
-        if upstream_parsed.hostname not in ALLOWED_UPSTREAM_HOSTS:
-            self._send_error(
-                HTTPStatus.FORBIDDEN,
-                f"upstream host not allowed: {upstream_parsed.hostname}",
-            )
+        err = _validate_upstream(upstream)
+        if err is not None:
+            status = (HTTPStatus.BAD_REQUEST
+                      if err.startswith(("malformed", "scheme"))
+                      else HTTPStatus.FORBIDDEN)
+            self._send_error(status, err)
             return
 
         cached = _cache_get(upstream)
@@ -232,7 +291,11 @@ class Handler(SimpleHTTPRequestHandler):
             _cache_put(upstream, body, content_type, status)
 
         self.send_response(status)
-        self.send_header("Content-Type", content_type)
+        # Force a non-renderable content type so an attacker can't get archived
+        # HTML/JS to execute under this origin. The JS layer reads the body via
+        # fetch().json()/.text(), both of which ignore Content-Type entirely.
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Cache-Control", "no-store")
