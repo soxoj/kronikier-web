@@ -329,7 +329,8 @@ def main() -> int:
     print("Open the URL above in your browser, then leave this tab — restarts")
     print("of this script don't require reopening it. Press Ctrl+C to stop.")
 
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    host = os.environ.get("SERVER_HOST", "127.0.0.1")
+    server = ThreadingHTTPServer((host, port), Handler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
