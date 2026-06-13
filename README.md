@@ -92,6 +92,12 @@ output), email **kronikier@soxoj.com** or open an issue at
 [github.com/soxoj/kronikier/issues](https://github.com/soxoj/kronikier/issues).
 Include the archived URL and the exact value that came out wrong.
 
+## SOWEL classification
+
+OSINT techniques used:
+  - [SOTL-7.1. Check Archives](https://sowel.soxoj.com/check-archives)
+  - [SOTL-22.5. Extract Contacts From Page Text](https://sowel.soxoj.com/page-text-contacts)
+
 ## License
 
 MIT.
